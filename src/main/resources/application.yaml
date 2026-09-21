@@ -1,0 +1,45 @@
+server:
+  address: 127.0.0.1
+  port: 8081
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 50
+    accept-count: 1000
+    max-connections: 8192
+spring:
+  application:
+    name: lexiang
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/lexiang?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=UTF-8}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      connection-timeout: 3000
+  redis:
+    host: ${REDIS_HOST:127.0.0.1}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    lettuce:
+      pool:
+        max-active: 100
+        max-idle: 20
+        min-idle: 10
+        time-between-eviction-runs: 10s
+  jackson:
+    default-property-inclusion: non_null
+mybatis-plus:
+  type-aliases-package: com.lexiang.entity
+logging:
+  level:
+    com.lexiang: debug
+rocketmq:
+  enabled: false
+lexiang:
+  mq:
+    pay-topic: lexiang-order-pay
+    timeout-topic: lexiang-order-timeout
+    timeout-delay-level: 4
