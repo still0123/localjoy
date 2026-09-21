@@ -1,83 +1,211 @@
 # LocalJoy · 乐享周边
 
-一个面向本地生活场景的 H5 分享项目，由 still0123 维护。后端使用 Spring Boot、MyBatis-Plus、MySQL、Redis 和 RocketMQ，前端使用 Vue 2、Element UI 与 Nginx。
+> 发现周边好店，分享玩乐体验。
 
-本仓库基于既有学习工程二次开发，保留必要的原作者和第三方归属信息，详见 [来源说明](THIRD_PARTY_NOTICES.md)。
+## 项目介绍
 
-## 功能与实现范围
+乐享周边是一款面向本地生活场景的周边玩乐分享应用，围绕用户验证码登录、周边店铺查询、发表分享帖、点赞、关注和秒杀店家福利券等业务展开，连接用户的探店体验、内容互动与优惠消费。
 
-| 功能 | 当前状态 |
+项目采用前后端分离架构，以 Spring Boot 提供业务服务，MySQL 保存业务数据，Redis 承担登录态管理、热点缓存、社交关系查询和秒杀资格预检，RocketMQ 负责订单消息处理与延迟关单。
+
+## 技术栈
+
+| 技术 | 用途 |
 | --- | --- |
-| 验证码登录、登录态续期和拦截校验 | 已实现；验证码写入后端日志，未接入短信平台 |
-| 店铺分类、名称搜索与详情缓存 | 已实现；空值缓存降低缓存穿透风险 |
-| 发布笔记、热门笔记、个人笔记列表 | 已实现基础接口 |
-| 点赞 | 基础计数，尚未实现重复点赞限制和取消点赞 |
-| 关注、取消关注、共同关注 | 已实现；共同关注通过 Redis Set 交集计算 |
-| 福利券秒杀 | Lua 预占库存及资格，数据库条件扣减库存 |
-| 支付结果与超时关单 | 有 RocketMQ 实现，默认关闭；未接入真实支付渠道 |
-| 关注动态推送、定位距离排序 | 尚未实现 |
+| Spring Boot / Spring MVC | 业务接口、依赖管理、请求拦截 |
+| MySQL | 用户、店铺、分享帖、关注关系与订单数据存储 |
+| MyBatis / MyBatis-Plus | 数据访问、分页查询与条件更新 |
+| Redis | 验证码、登录态、店铺缓存、共同关注、库存预检与分布式锁 |
+| Lua | 秒杀资格检查与 Redis 原子操作 |
+| RocketMQ | 支付结果异步处理、订单延迟检查 |
+| Vue 2 / Element UI / Axios | H5 页面与前后端交互 |
+| Nginx | 静态资源服务与 API 反向代理 |
+| Maven / JMeter | 项目构建与压力测试 |
 
-项目可启动不代表所有业务已达到生产可用状态。缓存一致性、订单事务与消息可靠性方面的限制见 [实现说明](docs/architecture.md)。
+## 业务功能
+
+### 用户登录
+
+使用手机号和验证码完成登录，通过令牌识别用户身份，支持登录态续期、访问校验和退出登录。
+
+### 周边店铺
+
+按分类浏览店铺，通过名称搜索和详情查询了解店铺信息，并查看店家提供的福利券。
+
+### 玩乐分享
+
+通过图片上传和分享帖发布记录探店体验，结合热门内容、个人分享列表和点赞互动组织内容展示。
+
+### 用户关注
+
+支持关注、取消关注、关注状态查询与共同关注，建立用户之间的社交关系。
+
+### 福利券与订单
+
+围绕店家福利券组织秒杀资格校验、库存扣减、订单创建、支付结果处理和超时关单流程。
+
+## 核心技术
+
+### 1. Redis 登录态与 ThreadLocal 用户上下文
+
+验证码使用 Redis String 存储，用户登录信息使用 Redis Hash 存储，并设置过期时间控制数据生命周期。
+
+请求进入后，拦截器根据 `authorization` 请求头读取用户信息并刷新登录态，将用户信息写入 ThreadLocal，供同一请求线程中的业务逻辑获取。登录拦截器负责受保护接口的身份校验，请求结束时清理线程上下文。
+
+### 2. 店铺缓存与缓存穿透处理
+
+店铺查询采用缓存优先策略：先查询 Redis，未命中时回源 MySQL，再将查询结果写入缓存。
+
+对于数据库中不存在的店铺，写入具有较短过期时间的空值缓存，减少重复无效请求对数据库的访问，降低缓存穿透带来的查询压力。
+
+### 3. 延时双删与缓存一致性
+
+更新店铺信息后删除缓存，并在延迟 500ms 后再次执行删除，缩短并发读写下旧数据重新写入缓存造成的不一致窗口。
+
+通过数据库更新与两次缓存失效配合，降低 Redis 与 MySQL 双写过程中的数据不一致风险。
+
+### 4. Redis + Lua 秒杀预检与库存控制
+
+将库存校验、重复购买判断与库存预占放入 Lua 脚本，在 Redis 中原子执行，提前过滤不满足秒杀条件的请求。
+
+数据库侧采用基于库存条件更新的乐观并发控制，通过 `stock > 0` 条件扣减库存，避免并发请求将数据库库存扣为负数。
+
+### 5. Redis Set 共同关注
+
+使用 Redis Set 保存用户关注的用户 ID，通过集合交集计算共同关注，再查询对应的用户信息，减少关系查询中的重复数据库访问。
+
+### 6. RocketMQ 支付结果异步处理
+
+通过 RocketMQ 将支付结果通知与订单状态更新解耦。支付接口写入支付标记并投递消息，由消费者异步处理订单支付结果，完成订单状态更新。
+
+### 7. 延迟消息与超时订单处理
+
+订单创建后投递延迟消息，在消费时检查订单状态，对超时未支付订单执行关闭和库存回补。存在支付标记时重新安排延迟检查，协调支付处理与超时关单流程。
+
+消费端结合 Redis 锁、订单状态检查和锁归属校验，控制同一订单的并发处理，降低重复消费与状态竞争的风险。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    Web["Vue H5 页面"] --> Nginx["Nginx"]
+    Nginx --> App["Spring Boot 业务服务"]
+    App --> MySQL["MySQL · 业务数据"]
+    App --> Redis["Redis · 登录态 / 缓存 / 秒杀预检"]
+    App --> MQ["RocketMQ · 支付消息 / 延迟消息"]
+    MQ --> Consumer["订单消费者"]
+    Consumer --> MySQL
+    Consumer --> Redis
+```
+
+订单消费者与 HTTP 接口位于同一后端工程中，通过消息队列分离请求处理与订单后续处理。
 
 ## 项目结构
 
 ```text
-src/main/java/com/lexiang/   后端控制器、服务、数据访问与消息处理
-src/main/resources/         配置、SQL、Mapper XML 与 Lua
-src/test/                   可显式启用的秒杀压测
-frontend/                   H5 页面、静态资源与 Windows Nginx
-scripts/                    本地启停、压测与数据核对工具
-jmeter/                     JMeter 测试计划
-docs/                       实现和验证说明
+localjoy/
+├── src/main/java/com/lexiang/
+│   ├── config/             应用配置与异常处理
+│   ├── controller/         业务接口
+│   ├── interceptor/        登录校验与用户上下文
+│   ├── service/            核心业务逻辑
+│   ├── mapper/             数据访问
+│   ├── entity/             数据实体
+│   ├── dto/                请求与响应对象
+│   ├── mq/                 消息生产与消费
+│   └── utils/              工具类与常量
+├── src/main/resources/
+│   ├── db/lexiang.sql      数据库表结构与演示数据
+│   ├── mapper/             MyBatis 映射文件
+│   ├── application*.yaml   应用配置
+│   └── *.lua               秒杀与锁释放脚本
+├── src/test/               测试代码
+├── frontend/               H5 页面、静态资源与 Windows Nginx
+├── scripts/                启停、压测与数据核对脚本
+├── jmeter/                 压力测试计划
+├── docker/                 RocketMQ 配置
+├── docs/                   技术文档
+├── .env.example            环境变量模板
+└── docker-compose.yml      RocketMQ 环境编排
 ```
-
-仓库名称为 `localjoy`，现有 Java 包、构建产物和数据库标识保持为 `lexiang`。
 
 ## 本地运行
 
-环境：JDK 17、Maven 3.9、MySQL 8、Redis。前端随仓库提供 Windows Nginx；其他系统可安装 Nginx 并使用 `frontend/conf/nginx.conf`。
+### 环境准备
 
-1. 克隆仓库并复制配置示例：
+- JDK 17、Maven 3.9
+- MySQL 8、Redis
+- Windows；前端随仓库提供 Nginx
+- Docker：用于启动 RocketMQ 环境
 
-   ```powershell
-   git clone https://github.com/still0123/localjoy.git
-   cd localjoy
-   Copy-Item .env.example .env
-   ```
+### 克隆与配置
 
-2. 编辑 `.env`，设置本机 MySQL 与 Redis 连接参数。该文件已被 Git 忽略。
-3. 首次使用时，在 MySQL 中创建 `lexiang` 数据库，并把 `src/main/resources/db/lexiang.sql` 导入这个新数据库。脚本包含重建表语句，已有数据的数据库无需重复导入。
-4. 启动 MySQL 与 Redis，双击 `启动乐享周边.cmd`，或执行：
+```powershell
+git clone https://github.com/still0123/localjoy.git
+cd localjoy
+Copy-Item .env.example .env
+```
 
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
-   ```
+编辑 `.env`，填写本机 MySQL 与 Redis 连接参数。Redis 无密码时，将 `REDIS_PASSWORD` 留空。该配置文件已加入 Git 忽略规则。
 
-5. 打开 http://127.0.0.1:8080/ 。关闭时双击 `停止乐享周边.cmd`。
+### 初始化数据库
 
-前端和后端默认仅监听本机的 8080、8081 端口；上传文件保存到 `frontend/html/lexiang/imgs`。
-Windows 脚本在本机 Redis 未启动时会尝试启动 `.env` 中指定的现有 Docker 容器。其他 Redis 部署方式请自行启动服务。
+在 MySQL 中创建数据库，并导入初始化文件：
 
-修改源码后，停止服务，再执行 `scripts/start-local.ps1 -Rebuild`。
-日志写入 `runtime` 和 `frontend/logs`，不提交到 Git。
+```sql
+CREATE DATABASE lexiang CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+USE lexiang;
+SOURCE C:/your/path/localjoy/src/main/resources/db/lexiang.sql;
+```
 
-## 可选 RocketMQ
+将 `SOURCE` 路径替换为实际文件位置，也可通过数据库工具导入。脚本包含重建表语句，请使用新建的演示数据库。
 
-先停止默认后端，然后执行：
+### 启动项目
+
+启动本机 MySQL（3306）和 Redis（6379），在项目根目录执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
+```
+
+或双击 **启动乐享周边.cmd**，随后访问 **http://127.0.0.1:8080/**。
+
+首次启动会构建后端并启动 Java 与 Nginx。修改源码后，可先停止服务，再使用 `-Rebuild` 参数重新构建。启动脚本会在 Redis 不可用时尝试启动 `.env` 指定的现有 Redis 容器。
+
+本地演示的登录验证码通过后端日志查看：
+
+```powershell
+Get-Content .\runtime\backend.log -Encoding UTF8 -Tail 50 -Wait
+```
+
+停止项目：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\stop-local.ps1
+```
+
+### 启用订单消息处理
+
+停止应用后，启动 RocketMQ，等待 NameServer 与 Broker 就绪，再使用 `rocketmq` 配置启动：
 
 ```powershell
 docker compose up -d
-. .\scripts\load-env.ps1
-mvn spring-boot:run "-Dspring-boot.run.profiles=rocketmq"
+$env:SPRING_PROFILES_ACTIVE = 'rocketmq'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
 ```
 
-当前支付接口用于本地模拟支付结果。默认关闭 MQ 时，不会执行支付结果异步落库或自动超时关单。
+RocketMQ Dashboard：http://127.0.0.1:8088/ 。Compose 提供消息队列环境，MySQL 与 Redis 独立启动。
 
-## 构建与验证
+### 构建
 
 ```powershell
 mvn -B verify
 ```
 
-普通构建不执行会创建业务数据的压测。压测须显式启用，具体命令和已验证范围见 [验证说明](docs/testing.md)。
-运行记录、会话令牌、压测结果、个人面试笔记和本机配置不会上传；SQL 中的用户账号是演示数据。
+## 项目文档
+
+- [技术实现说明](docs/architecture.md)
+- [构建与测试指南](docs/testing.md)
+- [源码来源与第三方组件说明](THIRD_PARTY_NOTICES.md)
+
+维护者：[still0123](https://github.com/still0123)
