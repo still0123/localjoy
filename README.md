@@ -206,6 +206,5 @@ mvn -B verify
 
 - [技术实现说明](docs/architecture.md)
 - [构建与测试指南](docs/testing.md)
-- [源码来源与第三方组件说明](THIRD_PARTY_NOTICES.md)
 
 维护者：[still0123](https://github.com/still0123)
